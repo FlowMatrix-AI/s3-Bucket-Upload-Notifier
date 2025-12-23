@@ -1,0 +1,58 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.12]
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r src/requirements.txt
+        pip install pytest hypothesis boto3 moto
+    
+    - name: Run unit tests
+      run: |
+        cd src && python -m pytest test_handler_unit.py -v
+    
+    - name: Run property-based tests
+      run: |
+        cd src && python -m pytest test_handler_properties.py -v
+    
+    - name: Run integration tests
+      run: |
+        cd src && python -m pytest test_handler_integration.py -v
+    
+    - name: Run all tests with coverage
+      run: |
+        cd src && python -m pytest . -v --tb=short
+
+  validate-sam:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup SAM CLI
+      uses: aws-actions/setup-sam@v2
+    
+    - name: Validate SAM template
+      run: sam validate
+    
+    - name: Build SAM application
+      run: sam build

@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: S3 File Upload Notifier - Serverless notification system for S3 uploads
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name for resource naming
+
+  NotificationEmail:
+    Type: String
+    Description: Email address to receive upload notifications
+    AllowedPattern: ^[^\s@]+@[^\s@]+\.[^\s@]+$
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.12
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+
+Resources:
+  # S3 Bucket for file uploads
+  FileUploadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'file-uploads-${AWS::AccountId}-${AWS::Region}-${Environment}'
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt FileUploadProcessor.Arn
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # SNS Topic for notifications
+  FileUploadNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'file-upload-notifications-${Environment}'
+      DisplayName: File Upload Alerts
+      KmsMasterKeyId: alias/aws/sns
+
+  # Email subscription to SNS topic
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref FileUploadNotificationTopic
+      Endpoint: !Ref NotificationEmail
+
+  # Lambda function for processing S3 events
+  FileUploadProcessor:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'file-upload-processor-${Environment}'
+      CodeUri: src/
+      Handler: handler.lambda_handler
+      Description: Processes S3 upload events and sends notifications
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref FileUploadNotificationTopic
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref FileUploadBucket
+            Event: s3:ObjectCreated:*
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+              Resource: !Sub '${FileUploadBucket}/*'
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref FileUploadNotificationTopic
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/file-upload-processor-${Environment}:*'
+
+  # Lambda permission for S3 to invoke the function
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FileUploadProcessor
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub '${FileUploadBucket}/*'
+
+  # CloudWatch Log Group for Lambda function
+  ProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/file-upload-processor-${Environment}'
+      RetentionInDays: 14
+
+Outputs:
+  S3BucketName:
+    Description: Name of the S3 bucket for file uploads
+    Value: !Ref FileUploadBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketName'
+
+  S3BucketArn:
+    Description: ARN of the S3 bucket for file uploads
+    Value: !GetAtt FileUploadBucket.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketArn'
+
+  LambdaFunctionName:
+    Description: Name of the Lambda function processing uploads
+    Value: !Ref FileUploadProcessor
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionName'
+
+  LambdaFunctionArn:
+    Description: ARN of the Lambda function processing uploads
+    Value: !GetAtt FileUploadProcessor.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaFunctionArn'
+
+  SNSTopicName:
+    Description: Name of the SNS topic for notifications
+    Value: !GetAtt FileUploadNotificationTopic.TopicName
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicName'
+
+  SNSTopicArn:
+    Description: ARN of the SNS topic for notifications
+    Value: !Ref FileUploadNotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicArn'
+
+  StackName:
+    Description: Name of the CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'
